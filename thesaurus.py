@@ -3,26 +3,28 @@ import json
 import re
 import sys
 import os
+import requests
 
 try:
-    from urllib.request import urlopen
-    from urllib.parse import urlparse
     from urllib.parse import quote
-    from urllib.error import HTTPError
 except ImportError:
-    from urlparse import urlparse
     from urllib import quote
-    from urllib2 import urlopen
-    from urllib2 import HTTPError
 
 alternativesLocation = os.path.join(os.path.abspath(os.path.dirname(__file__)), "alternatives.py")
 
-class NoResultError(Exception):
+
+class ThesaurusError(Exception):
   def __init__(self, message):
     self.message = message;
 
   def __str__(self):
     return repr(self.message)
+
+class NoResultError(ThesaurusError):
+    pass
+
+class HTTPError(ThesaurusError):
+    pass
 
 class ThesaurusCommand(sublime_plugin.TextCommand):
   def run(self, edit):
@@ -54,6 +56,8 @@ class ThesaurusCommand(sublime_plugin.TextCommand):
       self.alternatives = ["No results were found for '%s'!, try one of the following:" % self.word]
       self.alternatives.extend(self.get_alternative_words())
       sublime.active_window().show_quick_panel(self.alternatives, self.alternativeIsSelected)
+    except Exception as err:
+      self.view.set_status("Thesaurus", "Error: %s" % err)
 
   def alternativeIsSelected(self, value):
     if value > 1:
@@ -78,7 +82,7 @@ class ThesaurusCommand(sublime_plugin.TextCommand):
 
     value = re.subn(r'\(.*?\)$', "", value)[0]
     if value is not None:
-      self.view.replace(self.edit, self.region, value.strip().lower())
+      self.view.run_command("insert", {"characters": value.strip().lower()})
 
   def synonyms(self):
     result = []
@@ -86,7 +90,7 @@ class ThesaurusCommand(sublime_plugin.TextCommand):
         data = self.get_json_from_api()
         for entry in data["response"]:
             result.append(entry["list"]["synonyms"].split("|"))
-    except (KeyError, HTTPError):
+    except (KeyError, ):
         if 'data' in locals():
             raise NoResultError(data["error"])
         else:
@@ -99,9 +103,11 @@ class ThesaurusCommand(sublime_plugin.TextCommand):
   def get_json_from_api(self):
     word = quote(self.word)
     url = "http://thesaurus.altervista.org/thesaurus/v1?key=%s&word=%s&language=%s&output=json" % (self.api_key(), word, self.language())
-    response = urlopen(url)
-    content = response.read().decode('utf-8')
+    response = requests.get(url)
+    content = response.text
     response.close()
+    if response.status_code != 200:
+        raise HTTPError("HttpResponse status %d" % response.status_code)
     return json.loads(content)
 
   def api_key(self):
